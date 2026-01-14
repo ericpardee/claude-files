@@ -6,33 +6,45 @@ description: Use when the user asks to run Codex CLI (codex exec, codex resume) 
 # Codex Skill Guide
 
 ## Running a Task
-1. If unclear, ask the user (via AskUserQuestion) what they want code reviewed 
-2. Assemble the codex command with the appropriate options:
-   - `-m, --model gpt-5.1-codex-max`
-   - `--config model_reasoning_effort="xhigh"`
-   - `--full-auto`
-   - `-C, --cd <DIR>`
-   - "code review (insert)"
-2. When continuing a previous session, use `codex exec resume --last` via stdin. When resuming don't use any configuration flags unless explicitly requested by the user e.g. if he species the model or the reasoning effort when requesting to resume a session. Resume syntax: `echo "your prompt here" | codex exec --skip-git-repo-check resume --last 2>/dev/null`. All flags have to be inserted between exec and resume.
-3. **IMPORTANT**: By default, append `2>/dev/null` to all `codex exec` commands to suppress thinking tokens (stderr). Only show stderr if the user explicitly requests to see thinking tokens or if debugging is needed.
-4. Run the command, capture stdout/stderr (filtered as appropriate), and summarize the outcome for the user.
-5. **After Codex completes**, inform the user: "You can resume this Codex session at any time by saying 'codex resume' or asking me to continue with additional analysis or changes."
 
-### Quick Reference
-| Use case | Sandbox mode | Key flags |
-| --- | --- | --- |
-| Read-only review or analysis | `read-only` | `--sandbox read-only 2>/dev/null` |
-| Apply local edits | `workspace-write` | `--sandbox workspace-write --full-auto 2>/dev/null` |
-| Permit network or broad access | `danger-full-access` | `--sandbox danger-full-access --full-auto 2>/dev/null` |
-| Resume recent session | Inherited from original | `echo "prompt" \| codex exec --skip-git-repo-check resume --last 2>/dev/null` (no flags allowed) |
-| Run from another directory | Match task needs | `-C <DIR>` plus other flags `2>/dev/null` |
+1. If unclear, ask the user (via AskUserQuestion) what they want reviewed or changed.
+
+2. Assemble the codex command with appropriate options:
+   - `-m, --model gpt-5.1-codex-max` (default model)
+   - `--config model_reasoning_effort="<level>"` where level is: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+   - `--sandbox <mode>` - use `read-only` for reviews, `workspace-write` for edits, `danger-full-access` for network/broad access
+   - `--full-auto` - only for write operations, not needed for read-only
+   - `-C, --cd <DIR>` - run from a different directory
+
+3. When continuing a previous session, use resume syntax:
+   ```
+   echo "your prompt here" | codex exec --skip-git-repo-check resume --last 2>/dev/null
+   ```
+   Do not use configuration flags when resuming unless explicitly requested - the session inherits original settings.
+
+4. **IMPORTANT**: Append `2>/dev/null` to suppress thinking tokens (stderr). Only show stderr if debugging is needed.
+
+5. Run the command, summarize the outcome for the user.
+
+6. **After Codex completes**, inform the user: "You can resume this Codex session at any time by saying 'codex resume'."
+
+## Quick Reference
+
+| Use case | Command example |
+| --- | --- |
+| Code review | `codex exec -m gpt-5.1-codex-max --config model_reasoning_effort="xhigh" --sandbox read-only "Review the code..." 2>/dev/null` |
+| Apply edits | `codex exec -m gpt-5.1-codex-max --config model_reasoning_effort="xhigh" --sandbox workspace-write --full-auto "Refactor..." 2>/dev/null` |
+| Full access | `codex exec -m gpt-5.1-codex-max --sandbox danger-full-access --full-auto "..." 2>/dev/null` |
+| Resume | `echo "continue with..." \| codex exec --skip-git-repo-check resume --last 2>/dev/null` |
+| Different dir | `codex exec -C /path/to/dir --sandbox read-only "..." 2>/dev/null` |
 
 ## Following Up
-- After every `codex` command, immediately use `AskUserQuestion` to confirm next steps, collect clarifications, or decide whether to resume with `codex exec resume --last`.
-- When resuming, pipe the new prompt via stdin: `echo "new prompt" | codex exec resume --last 2>/dev/null`. The resumed session automatically uses the same model, reasoning effort, and sandbox mode from the original session.
-- Restate the chosen model, reasoning effort, and sandbox mode when proposing follow-up actions.
+
+- When output includes actionable findings or the user might want changes applied, offer to resume the session.
+- When resuming, pipe the new prompt via stdin - the session keeps its original model, reasoning effort, and sandbox mode.
 
 ## Error Handling
-- Stop and report failures whenever `codex --version` or a `codex exec` command exits non-zero; request direction before retrying.
-- Before you use high-impact flags (`--full-auto`, `--sandbox danger-full-access`, `--skip-git-repo-check`) ask the user for permission using AskUserQuestion unless it was already given.
-- When output includes warnings or partial results, summarize them and ask how to adjust using `AskUserQuestion`.
+
+- Stop and report failures when `codex` exits non-zero; request direction before retrying.
+- Before using `--full-auto`, `--sandbox danger-full-access`, or `--skip-git-repo-check`, ask for user permission unless already given.
+- When output includes warnings or partial results, summarize and ask how to proceed.
