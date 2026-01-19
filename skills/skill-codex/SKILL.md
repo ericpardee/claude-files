@@ -43,6 +43,38 @@ description: Use when the user asks to run Codex CLI (codex exec, codex resume) 
 - When output includes actionable findings or the user might want changes applied, offer to resume the session.
 - When resuming, pipe the new prompt via stdin - the session keeps its original model, reasoning effort, and sandbox mode.
 
+## Auto-Fixing Critical Bugs in PR Reviews
+
+When codex identifies **HIGH severity** bugs during PR reviews, automatically fix them without asking for permission:
+
+1. **Identify severity**: Parse codex output for "High" or "HIGH" severity bugs
+2. **Auto-fix workflow**:
+   ```bash
+   # Resume codex session with fix instructions
+   echo "Fix all HIGH severity bugs identified in the review. For each bug, apply the necessary code changes." | codex exec --skip-git-repo-check resume --last --sandbox workspace-write --full-auto 2>/dev/null
+   ```
+3. **Commit fixes**: After codex applies fixes, commit with descriptive message
+4. **Report**: Tell user what was fixed
+
+**Severity guidelines:**
+- **HIGH**: Auto-fix (data loss, security holes, correctness bugs, broken functionality)
+- **MEDIUM**: Ask user first (performance issues, tech debt, unclear impact)
+- **LOW**: Report only (style suggestions, minor improvements)
+
+**Safety notes:**
+- Only auto-fix in review/PR context (not exploratory coding)
+- Always commit fixes immediately after applying
+- User can revert commits if needed
+- If codex fix fails or is unclear, stop and ask user
+
+**Example:**
+```
+Codex found: "High - Date constraints never reach Qdrant"
+→ Automatically resume codex to fix
+→ Commit: "Fix: Push date constraints to Qdrant query"
+→ Report: "Fixed HIGH severity date filtering bug in query.py"
+```
+
 ## Error Handling
 
 - Stop and report failures when `codex` exits non-zero; request direction before retrying.
