@@ -9,3 +9,5 @@ always use:
 
 prefer python and use venv
 
+# Markdown
+adhere to DavidAnson markdownlint
