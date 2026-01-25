@@ -58,6 +58,9 @@ BLOCKED_PATTERNS = [
     r"git\s+push.*--force.*master",            # force push to master
     r"git\s+reset\s+--hard\s+HEAD~[0-9]+",     # reset multiple commits
     r"git\s+clean\s+-[dDfFxX]+",               # aggressive git clean
+
+    # Infrastructure destruction
+    r"terraform\s+apply",                       # terraform apply
 ]
 
 # Patterns that trigger a warning (suspicious but not blocked)
