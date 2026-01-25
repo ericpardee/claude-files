@@ -1,0 +1,27 @@
+{
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude-code-docs/claude-docs-helper.sh hook-check"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/dangerous-command-blocker.py"
+          }
+        ]
+      }
+    ]
+  },
+  "alwaysThinkingEnabled": true,
+  "model": "opus"
+}
