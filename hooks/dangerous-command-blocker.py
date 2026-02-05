@@ -61,6 +61,7 @@ BLOCKED_PATTERNS = [
 
     # Infrastructure destruction
     r"terraform\s+apply",                       # terraform apply
+    r"terraform\s+destroy",                     # terraform destroy
 ]
 
 # Patterns that trigger a warning (suspicious but not blocked)
