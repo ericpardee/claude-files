@@ -10,38 +10,47 @@ description: Use when the user asks to run Codex CLI (codex exec, codex resume) 
 1. If unclear, ask the user (via AskUserQuestion) what they want reviewed or changed.
 
 2. Assemble the codex command with appropriate options:
-   - `-m, --model gpt-5.1-codex-max` (default model)
-   - `--config model_reasoning_effort="<level>"` where level is: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+   - `-m, --model gpt-5.3-codex` (default model)
+   - `-c model_reasoning_effort="xhigh"` (default reasoning effort; options: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`)
    - `--sandbox <mode>` - use `read-only` for reviews, `workspace-write` for edits, `danger-full-access` for network/broad access
    - `--full-auto` - only for write operations, not needed for read-only
    - `-C, --cd <DIR>` - run from a different directory
 
 3. When continuing a previous session, use resume syntax:
    ```
-   echo "your prompt here" | codex exec --skip-git-repo-check resume --last 2>/dev/null
+   codex exec resume --last "your prompt here" 2>/dev/null
    ```
+   Add `--skip-git-repo-check` if running outside a git repo.
    Do not use configuration flags when resuming unless explicitly requested - the session inherits original settings.
 
-4. **IMPORTANT**: Append `2>/dev/null` to suppress thinking tokens (stderr). Only show stderr if debugging is needed.
+4. For code reviews, prefer the dedicated review subcommand:
+   ```
+   codex exec review --base main "Review instructions" 2>/dev/null
+   ```
+   Options: `--uncommitted` (staged/unstaged/untracked), `--base <branch>`, `--commit <sha>`.
 
-5. Run the command, summarize the outcome for the user.
+5. **IMPORTANT**: Append `2>/dev/null` to suppress thinking tokens (stderr). Only show stderr if debugging is needed.
 
-6. **After Codex completes**, inform the user: "You can resume this Codex session at any time by saying 'codex resume'."
+6. Run the command, summarize the outcome for the user.
+
+7. **After Codex completes**, inform the user: "You can resume this Codex session at any time by saying 'codex resume'."
 
 ## Quick Reference
 
 | Use case | Command example |
 | --- | --- |
-| Code review | `codex exec -m gpt-5.1-codex-max --config model_reasoning_effort="xhigh" --sandbox read-only "Review the code..." 2>/dev/null` |
-| Apply edits | `codex exec -m gpt-5.1-codex-max --config model_reasoning_effort="xhigh" --sandbox workspace-write --full-auto "Refactor..." 2>/dev/null` |
-| Full access | `codex exec -m gpt-5.1-codex-max --sandbox danger-full-access --full-auto "..." 2>/dev/null` |
-| Resume | `echo "continue with..." \| codex exec --skip-git-repo-check resume --last 2>/dev/null` |
+| Code review | `codex exec review --base main 2>/dev/null` |
+| Review uncommitted | `codex exec review --uncommitted 2>/dev/null` |
+| Review a commit | `codex exec review --commit abc123 2>/dev/null` |
+| Apply edits | `codex exec --sandbox workspace-write --full-auto "Refactor..." 2>/dev/null` |
+| Full access | `codex exec --sandbox danger-full-access --full-auto "..." 2>/dev/null` |
+| Resume | `codex exec resume --last "continue with..." 2>/dev/null` |
 | Different dir | `codex exec -C /path/to/dir --sandbox read-only "..." 2>/dev/null` |
 
 ## Following Up
 
 - When output includes actionable findings or the user might want changes applied, offer to resume the session.
-- When resuming, pipe the new prompt via stdin - the session keeps its original model, reasoning effort, and sandbox mode.
+- When resuming, pass the new prompt as an argument - the session keeps its original model, reasoning effort, and sandbox mode.
 
 ## Auto-Fixing Critical Bugs in PR Reviews
 
@@ -51,7 +60,7 @@ When codex identifies **HIGH severity** bugs during PR reviews, automatically fi
 2. **Auto-fix workflow**:
    ```bash
    # Resume codex session with fix instructions
-   echo "Fix all HIGH severity bugs identified in the review. For each bug, apply the necessary code changes." | codex exec --skip-git-repo-check resume --last --sandbox workspace-write --full-auto 2>/dev/null
+   codex exec resume --last --sandbox workspace-write --full-auto "Fix all HIGH severity bugs identified in the review. For each bug, apply the necessary code changes." 2>/dev/null
    ```
 3. **Commit fixes**: After codex applies fixes, commit with descriptive message
 4. **Report**: Tell user what was fixed
