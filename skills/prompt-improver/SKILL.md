@@ -22,7 +22,7 @@ The user has provided this prompt to improve: "$ARGUMENTS"
 - Is the prompt vague or ambiguous?
 - Does it lack structure or organization?
 - Are there missing examples?
-- Could it benefit from chain-of-thought reasoning?
+- Could it benefit from step-by-step reasoning instructions?
 - Does it need clearer output format specifications?
 
 ## Step 3: Apply Improvements
@@ -30,12 +30,12 @@ The user has provided this prompt to improve: "$ARGUMENTS"
 Apply these enhancements based on the 4-step prompt improvement methodology:
 
 ### A. Structure Enhancement
-- Add XML tags to separate sections: `<context>`, `<instructions>`, `<examples>`, `<output_format>`, `<thinking>`
-- Organize content in logical flow: context → instructions → reasoning approach → examples → output format
+- Add XML tags to separate sections: `<context>`, `<instructions>`, `<examples>`, `<output_format>`
+- Organize content in logical flow: context -> instructions -> reasoning approach -> examples -> output format
 
-### B. Chain-of-Thought Addition
-- Add `<thinking>` sections that guide Claude's reasoning process
-- Include step-by-step analytical instructions like:
+### B. Reasoning Instructions
+- Add step-by-step analytical guidance that directs Claude's reasoning process
+- Include instructions like:
   - "First, analyze the input by..."
   - "Then, consider these factors..."
   - "Evaluate whether..."
@@ -49,8 +49,7 @@ Apply these enhancements based on the 4-step prompt improvement methodology:
 
 ### D. Example Enhancement
 - If the original has examples, rewrite them to show the reasoning process
-- Add `<thinking>` sections within examples
-- Demonstrate input → reasoning → output flow
+- Demonstrate input -> reasoning -> output flow
 
 # Output Requirements
 
@@ -87,16 +86,15 @@ You MUST output your response in exactly this format:
 
 # Best Practices to Apply
 
-Based on Claude Code and effective agent design principles:
+Based on Claude and effective agent design principles:
 
 1. **Be Specific**: Use concrete, detailed guidance instead of vague instructions
 2. **Add Structure**: Use XML tags to organize different sections
-3. **Include Reasoning**: Add chain-of-thought instructions for complex tasks
+3. **Include Reasoning**: Add step-by-step reasoning instructions for complex tasks
 4. **Verify & Validate**: Include explicit checking and validation steps
 5. **Provide Context**: Give Claude relevant background information
 6. **Show Examples**: Demonstrate the complete reasoning process
 7. **Define Output**: Clearly specify the expected output structure
-8. **Consider Prefill**: Suggest strategic response starts when appropriate
 
 # Important Notes
 
@@ -104,8 +102,6 @@ Based on Claude Code and effective agent design principles:
 - It may increase processing time but will improve accuracy
 - Best suited for complex tasks requiring high-quality outputs
 - For simple tasks, light improvements may be sufficient
-
-Now analyze and improve the prompt: "$ARGUMENTS"
 
 # After Showing the Improved Prompt
 
