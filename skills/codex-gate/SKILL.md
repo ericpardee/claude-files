@@ -1,6 +1,6 @@
 ---
 name: codex-gate
-description: Use when Eric wants a cross-model review gate before shipping code - "before I push/merge/deploy", "have codex review this branch/these commits/the plan", "cross-model review", "second set of eyes on this branch", or /codex-gate. Runs Codex CLI at max reasoning against a diff scope, forces a fix-or-rebut disposition on every Critical/High/Medium finding, loops until clean (max 2 rounds), and writes codex-gate-report.md.
+description: Use when User wants a cross-model review gate before shipping code - "before I push/merge/deploy", "have codex review this branch/these commits/the plan", "cross-model review", "second set of eyes on this branch", or /codex-gate. Runs Codex CLI at max reasoning against a diff scope, forces a fix-or-rebut disposition on every Critical/High/Medium finding, loops until clean (max 2 rounds), and writes codex-gate-report.md.
 ---
 
 # Codex Gate
@@ -79,7 +79,7 @@ allowed.
 
 - **FIX**: read the cited code, confirm the defect is real, apply the fix in the
   working tree, and run the relevant tests/checks. Do not commit or push; leave
-  fixes as working-tree changes unless Eric asks otherwise.
+  fixes as working-tree changes unless User asks otherwise.
 - **REBUT**: write a justification that cites the actual code or documented
   behavior showing the finding is wrong or does not apply. "Seems fine" is not a
   rebuttal; a rebuttal must be checkable. If you cannot honestly rebut it, fix it.
@@ -93,7 +93,7 @@ allowed.
 3. A round = one Codex run plus full disposition of its findings.
 4. Loop until Codex returns `NO FINDINGS`, for a maximum of 2 full rounds
    (initial review + one re-review). If findings remain after round 2, STOP.
-   Do not fix further, do not start round 3; surface the residue to Eric verbatim
+   Do not fix further, do not start round 3; surface the residue to User verbatim
    with your assessment of each remaining item.
 
 ## Step 5: Emit the gate ledger
@@ -125,7 +125,7 @@ One of:
 - FAIL - Critical/High/Medium findings remain after 2 rounds (list them)
 ```
 
-Finish by telling Eric the verdict, the one-line summary of each fix, and that the
+Finish by telling User the verdict, the one-line summary of each fix, and that the
 Codex session can be resumed with `codex exec resume --last`.
 
 ## Hard rules
