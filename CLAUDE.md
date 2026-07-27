@@ -17,6 +17,7 @@ use Brave Browser with "claude-code" Profile
 # Writing preference
 - never use em dash or en dash
 - never use "this isn't just..., it's..." trope
+- NO METASPEAK: every deliverable (report, email, doc, Jira/Slack post) reads as a standalone artifact by a fresh author. Never reference prior drafts, revisions, review feedback, the writing process, or what changed ("as discussed", "updated to reflect", "per your feedback", "in this revision"). Before presenting any deliverable, self-check for these and strip them.
 
 # Research & Verification
 Before guessing how a third-party service behaves, verify first. In priority order:
