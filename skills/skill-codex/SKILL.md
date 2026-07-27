@@ -10,7 +10,7 @@ description: Use when the user asks to run Codex CLI (codex exec, codex resume) 
 1. If unclear, ask the user (via AskUserQuestion) what they want reviewed or changed.
 
 2. Assemble the codex command with appropriate options:
-   - `-m, --model gpt-5.3-codex` (default model)
+   - `-m, --model gpt-5.6-sol` (default model; pair with `-c model_reasoning_effort="xhigh"`. Fallback if unavailable: `gpt-5.6-terra`, also at xhigh)
    - `-c model_reasoning_effort="xhigh"` (default reasoning effort; options: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`)
    - `--sandbox <mode>` - use `read-only` for reviews, `workspace-write` for edits, `danger-full-access` for network/broad access
    - `--full-auto` - only for write operations, not needed for read-only

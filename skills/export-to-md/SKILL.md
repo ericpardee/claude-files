@@ -68,15 +68,15 @@ python3 ~/.claude/skills/export-to-md/convert.py
 Follow the prompts to select file and enter title.
 
 ### Example 2: Convert specific file
-User: `/export-to-md convert the shoulder surgery export`
+User: `/export-to-md convert the trip planning export`
 
 Run:
 ```bash
-python3 ~/.claude/skills/export-to-md/convert.py "2026-01-19-command-messageprompt-improvercommand-message.txt.txt"
+python3 ~/.claude/skills/export-to-md/convert.py "2026-01-19-trip-planning.txt"
 ```
 
 ### Example 3: User provides title
-User: `/export-to-md` then provides title "Shoulder Surgery with Claude"
+User: `/export-to-md` then provides title "Trip Planning with Claude"
 
 The script will prompt for the title interactively.
 

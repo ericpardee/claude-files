@@ -2,19 +2,10 @@
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
-  "model": "opus",
+  "model": "fable",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/dangerous-command-blocker.py"
-          }
-        ]
-      },
       {
         "matcher": "Read",
         "hooks": [
@@ -26,6 +17,25 @@
       }
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ~/.claude/statusline.py"
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "rayfernando-skills": {
+      "source": {
+        "source": "github",
+        "repo": "RayFernando1337/rayfernando-skills"
+      }
+    }
+  },
   "alwaysThinkingEnabled": true,
-  "skipDangerousModePermissionPrompt": true
+  "effortLevel": "xhigh",
+  "autoCompactWindow": 800000,
+  "skipDangerousModePermissionPrompt": true,
+  "agentPushNotifEnabled": true
 }
