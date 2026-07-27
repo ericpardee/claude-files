@@ -131,7 +131,7 @@ Codex session can be resumed with `codex exec resume --last`.
 ## Hard rules
 
 - Never let a finding disappear without a FIXED or REBUTTED entry in the ledger.
-- Never exceed 2 rounds; residue goes to Eric, not into round 3.
+- Never exceed 2 rounds; residue goes to the user, not into round 3.
 - Codex reviews read-only; Claude applies fixes. Do not give Codex write access
   (`--full-auto`, `--yolo`, `workspace-write`) during a gate run.
 - No commits, no pushes, no staging as part of the gate.
