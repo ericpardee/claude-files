@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""session-ledger: automatic catalog of Claude Code sessions.
+
+Modes:
+  --sweep                 distill sessions with new activity since last run
+  --session <path|id>     distill one session now (used by the SessionEnd hook)
+  --seed [--days N]       catalog all sessions active in the last N days (default 14)
+  --dream                 weekly consolidation pass over the ledger file
+  --dry-run               with any mode: print what would happen, write nothing
+
+Config comes from ~/.claude/session-ledger.env (KEY=VALUE). Process
+environment variables with the same names take precedence, which is handy
+for testing. Only LEDGER_FILE is required.
+
+stdlib only. No third-party imports.
+"""
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HOME = os.path.expanduser("~")
+CLAUDE_DIR = os.path.join(HOME, ".claude")
+ENV_FILE = os.path.join(CLAUDE_DIR, "session-ledger.env")
+STATE_FILE = os.path.join(CLAUDE_DIR, "session-ledger.state.json")
+LOCK_DIR = os.path.join(CLAUDE_DIR, "session-ledger.lock")
+LOG_FILE = os.path.join(CLAUDE_DIR, "session-ledger.log")
+RUNS_DIR = os.path.join(CLAUDE_DIR, "session-ledger-runs")
+
+LEDGER_HEADER = "# Claude Code session ledger"
+LOCK_STALE_SECONDS = 2 * 60 * 60
+
+DEFAULTS = {
+    "MODEL": "claude-haiku-4-5-20251001",
+    "PROJECTS_DIR": os.path.join(CLAUDE_DIR, "projects"),
+    "MIN_NEW_PROMPTS": "1",
+    "MAX_EXCERPT_CHARS": "10000",
+}
+
+NOISE_PREFIXES = (
+    "<command-name>",
+    "<command-message>",
+    "<local-command-",
+    "<system-reminder>",
+    "<task-notification",
+    "<bash-",
+    "[Request interrupted",
+)
+
+DISTILL_INSTRUCTIONS = """\
+You are a session cataloger. Below is a distilled excerpt of one Claude Code
+session: the user's typed prompts, the final assistant message, and metadata.
+
+Return EXACTLY three markdown list lines in this format and NOTHING else. No
+heading, no preamble, no code fences, no Resume line, no trailing commentary:
+
+- Outcome: <max 3 lines: what actually happened, was decided, or was shipped>
+- Artifacts: <files/PRs/reports touched, or "none">
+- Open threads: <unresolved items, or "none">
+
+Base everything only on the excerpt. Be terse and factual.
+
+--- SESSION EXCERPT ---
+{excerpt}
+"""
+
+DREAM_INSTRUCTIONS = """\
+You are consolidating a Claude Code session ledger file. Below is the full
+current content. Rewrite it and return ONLY the new file content (raw
+markdown, no code fences, no commentary). Rules:
+
+1. Keep the first line exactly: {header}
+2. Directly under the header, add (or refresh) a short section titled
+   "## Promote to memory" listing durable facts worth adding to long-term
+   memory, for human review. Keep it under 10 bullets. If nothing qualifies,
+   write "- none".
+3. Merge duplicate or related entries for the same session or the same thread
+   of work into a single entry. When merging, keep the newest date and the
+   union of Artifacts and Open threads.
+4. Mark clearly resolved threads as closed (change the Open threads line to
+   "none (closed)" when a later entry shows the thread was finished).
+5. CRITICAL: keep every distinct Resume line (`claude --resume <id>`). When
+   entries merge, keep all their Resume lines inside the merged entry.
+6. Keep newest entries at the top. Do not invent information.
+
+--- CURRENT LEDGER ---
+{ledger}
+"""
+
+
+def log(msg):
+    line = "%s %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), msg)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        pass
+
+
+def die(msg, code=1):
+    sys.stderr.write("session-ledger: %s\n" % msg)
+    sys.exit(code)
+
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    if os.path.isfile(ENV_FILE):
+        with open(ENV_FILE, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key:
+                    cfg[key] = val
+    for key in ("LEDGER_FILE", "MODEL", "PROJECTS_DIR", "MIN_NEW_PROMPTS", "MAX_EXCERPT_CHARS"):
+        if os.environ.get(key):
+            cfg[key] = os.environ[key]
+    if not cfg.get("LEDGER_FILE"):
+        die(
+            "LEDGER_FILE is not set. Add LEDGER_FILE=/path/to/ledger.md to %s "
+            "(run install.sh to create it) or export LEDGER_FILE." % ENV_FILE
+        )
+    cfg["LEDGER_FILE"] = os.path.expanduser(cfg["LEDGER_FILE"])
+    cfg["PROJECTS_DIR"] = os.path.expanduser(cfg["PROJECTS_DIR"])
+    cfg["MIN_NEW_PROMPTS"] = int(cfg["MIN_NEW_PROMPTS"])
+    cfg["MAX_EXCERPT_CHARS"] = int(cfg["MAX_EXCERPT_CHARS"])
+    return cfg
+
+
+# --- locking (atomic mkdir) -------------------------------------------------
+
+def _lock_holder_dead():
+    """True if the lock's recorded pid no longer exists."""
+    try:
+        with open(os.path.join(LOCK_DIR, "pid"), encoding="utf-8") as fh:
+            pid = int(fh.read().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+
+
+def acquire_lock():
+    try:
+        st = os.stat(LOCK_DIR)
+        import time
+        if time.time() - st.st_mtime > LOCK_STALE_SECONDS or _lock_holder_dead():
+            log("breaking stale lock (%s)" % LOCK_DIR)
+            shutil.rmtree(LOCK_DIR, ignore_errors=True)
+    except FileNotFoundError:
+        pass
+    try:
+        os.mkdir(LOCK_DIR)
+    except FileExistsError:
+        log("another instance holds the lock (%s); exiting" % LOCK_DIR)
+        return False
+    try:
+        with open(os.path.join(LOCK_DIR, "pid"), "w", encoding="utf-8") as fh:
+            fh.write(str(os.getpid()))
+    except OSError:
+        pass
+    return True
+
+
+def release_lock():
+    shutil.rmtree(LOCK_DIR, ignore_errors=True)
+
+
+# --- state -------------------------------------------------------------------
+
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    fd, tmp = tempfile.mkstemp(dir=CLAUDE_DIR, prefix=".session-ledger.state.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=1, sort_keys=True)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# --- session discovery -------------------------------------------------------
+
+def encode_project_dir(path):
+    """Mirror Claude Code's cwd -> project dir encoding.
+
+    Verified against real dirs: every non-alphanumeric character becomes '-'
+    (e.g. /Users/x/Development/github.com/y -> -Users-x-Development-github-com-y).
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(path))
+
+
+def find_sessions(cfg):
+    """Yield (session_id, jsonl_path) for top-level session transcripts."""
+    projects_dir = cfg["PROJECTS_DIR"]
+    skip_project = encode_project_dir(RUNS_DIR)
+    if not os.path.isdir(projects_dir):
+        return
+    for proj in sorted(os.listdir(projects_dir)):
+        proj_path = os.path.join(projects_dir, proj)
+        if not os.path.isdir(proj_path) or proj == skip_project:
+            continue
+        for name in sorted(os.listdir(proj_path)):
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(proj_path, name)
+            if "/subagents/" in path:
+                continue
+            yield name[:-6], path
+
+
+def resolve_session_arg(cfg, arg):
+    """Resolve --session argument (transcript path or session id) to a path."""
+    if os.path.sep in arg or arg.endswith(".jsonl"):
+        path = os.path.expanduser(arg)
+        if os.path.isfile(path):
+            return path
+        die("transcript not found: %s" % arg)
+    for sid, path in find_sessions(cfg):
+        if sid == arg:
+            return path
+    die("no session jsonl found for id %s under %s" % (arg, cfg["PROJECTS_DIR"]))
+
+
+def session_is_excluded(path):
+    """Skip subagent transcripts and the recursion-guard runs project."""
+    norm = os.path.abspath(path)
+    if "/subagents/" in norm:
+        return True
+    return os.path.basename(os.path.dirname(norm)) == encode_project_dir(RUNS_DIR)
+
+
+# --- transcript parsing -------------------------------------------------------
+
+def extract_text_from_content(content):
+    """Return typed-prompt text from a user record's message.content, or None.
+
+    content is either a plain string or a list of blocks; tool_result-only
+    lists carry no typed prompt.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text:
+                    parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    return None
+
+
+def is_noise_prompt(text):
+    stripped = text.lstrip()
+    return stripped.startswith(NOISE_PREFIXES)
+
+
+def parse_session(path):
+    """Parse a session jsonl into the bits the distiller needs."""
+    prompts = []
+    last_assistant = None
+    ai_title = None
+    custom_title = None
+    cwd = None
+    first_ts = None
+    last_ts = None
+    session_id = None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            rtype = rec.get("type")
+            if rec.get("sessionId") and not session_id:
+                session_id = rec["sessionId"]
+            ts = rec.get("timestamp")
+            if ts:
+                if first_ts is None or ts < first_ts:
+                    first_ts = ts
+                if last_ts is None or ts > last_ts:
+                    last_ts = ts
+            if rec.get("cwd") and not cwd:
+                cwd = rec["cwd"]
+            if rtype == "ai-title":
+                ai_title = rec.get("aiTitle") or ai_title
+            elif rtype == "custom-title":
+                custom_title = rec.get("customTitle") or custom_title
+            elif rtype == "user":
+                if rec.get("isMeta"):
+                    continue
+                msg = rec.get("message") or {}
+                if msg.get("role") != "user":
+                    continue
+                text = extract_text_from_content(msg.get("content"))
+                if text is None or not text.strip() or is_noise_prompt(text):
+                    continue
+                prompts.append(text.strip())
+            elif rtype == "assistant":
+                msg = rec.get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, list):
+                    texts = [
+                        b.get("text", "")
+                        for b in content
+                        if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                    ]
+                    if texts:
+                        last_assistant = "\n".join(texts)
+                elif isinstance(content, str) and content.strip():
+                    last_assistant = content
+    if not session_id:
+        session_id = os.path.splitext(os.path.basename(path))[0]
+    title = custom_title or ai_title
+    if not title and prompts:
+        title = re.sub(r"\s+", " ", prompts[0]).strip()[:60]
+    if not title:
+        title = "untitled"
+    return {
+        "session_id": session_id,
+        "path": path,
+        "prompts": prompts,
+        "last_assistant": last_assistant,
+        "title": title,
+        "cwd": cwd or os.getcwd(),
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+    }
+
+
+def build_excerpt(info, max_chars):
+    lines = []
+    lines.append("cwd: %s" % info["cwd"])
+    lines.append("started: %s" % (info["first_ts"] or "unknown"))
+    lines.append("last activity: %s" % (info["last_ts"] or "unknown"))
+    lines.append("")
+    for i, prompt in enumerate(info["prompts"], 1):
+        lines.append("USER PROMPT %d:" % i)
+        lines.append(prompt)
+        lines.append("")
+    if info["last_assistant"]:
+        lines.append("FINAL ASSISTANT MESSAGE:")
+        lines.append(info["last_assistant"])
+    excerpt = "\n".join(lines)
+    if len(excerpt) > max_chars:
+        head = int(max_chars * 0.3)
+        tail = max_chars - head
+        excerpt = excerpt[:head] + "\n[... excerpt trimmed ...]\n" + excerpt[-tail:]
+    return excerpt
+
+
+# --- distillation ------------------------------------------------------------
+
+def entry_date(info):
+    ts = info["last_ts"] or info["first_ts"]
+    if ts:
+        return ts[:10]
+    return datetime.date.today().isoformat()
+
+
+def run_claude(prompt, cfg):
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "--model", cfg["MODEL"]],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            cwd=RUNS_DIR,
+            timeout=300,
+        )
+    except FileNotFoundError:
+        return None, "claude CLI not found on PATH"
+    except subprocess.TimeoutExpired:
+        return None, "claude -p timed out"
+    if proc.returncode != 0:
+        return None, "claude exited %d: %s" % (proc.returncode, proc.stderr.strip()[:200])
+    out = proc.stdout.strip()
+    if not out:
+        return None, "claude returned empty output"
+    return out, None
+
+
+def strip_code_fence(text):
+    """Remove one wrapping ``` fence if the model added it despite instructions."""
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+    return t
+
+
+def distill_session(info, cfg):
+    """Return (entry_markdown, error).
+
+    The model produces only the three content lines; the header and Resume
+    line are built here from known metadata, so model formatting drift can
+    never invalidate an entry. Tolerates a model that returns a full block
+    anyway (its heading/Resume lines are discarded).
+    """
+    excerpt = build_excerpt(info, cfg["MAX_EXCERPT_CHARS"])
+    sid = info["session_id"]
+    prompt = DISTILL_INSTRUCTIONS.format(excerpt=excerpt)
+    out, err = run_claude(prompt, cfg)
+    if err:
+        return None, err
+    out = strip_code_fence(out)
+    fields, current = {}, None
+    for raw in out.splitlines():
+        s = raw.strip()
+        low = s.lower()
+        if not s or s.startswith("#") or low.startswith(("- resume:", "resume:")):
+            continue
+        matched = False
+        for key in ("Outcome", "Artifacts", "Open threads"):
+            for pre in ("- %s:" % key.lower(), "* %s:" % key.lower(), "%s:" % key.lower()):
+                if low.startswith(pre):
+                    fields[key] = s[len(pre):].strip()
+                    current = key
+                    matched = True
+                    break
+            if matched:
+                break
+        if not matched and current:
+            fields[current] = (fields[current] + " " + s.lstrip("-* ").strip()).strip()
+    if not fields.get("Outcome"):
+        return None, "malformed distill output (%r...)" % out[:80]
+    project = os.path.basename(info["cwd"].rstrip(os.sep)) or info["cwd"]
+    entry = "\n".join([
+        "## %s | %s | %s | %s" % (entry_date(info), project, info["title"], sid[:8]),
+        "- Outcome: %s" % fields["Outcome"],
+        "- Artifacts: %s" % (fields.get("Artifacts") or "none"),
+        "- Open threads: %s" % (fields.get("Open threads") or "none"),
+        "- Resume: `claude --resume %s` (in %s)" % (sid, info["cwd"]),
+    ])
+    return entry, None
+
+
+def append_entry(cfg, entry):
+    ledger = cfg["LEDGER_FILE"]
+    if os.path.isfile(ledger):
+        with open(ledger, encoding="utf-8") as fh:
+            content = fh.read()
+    else:
+        content = ""
+    if not content.strip():
+        content = LEDGER_HEADER + "\n"
+    lines = content.splitlines()
+    insert_at = len(lines)
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            insert_at = i + 1
+            break
+    new_lines = lines[:insert_at] + ["", entry.rstrip()] + lines[insert_at:]
+    body = "\n".join(new_lines).rstrip() + "\n"
+    os.makedirs(os.path.dirname(os.path.abspath(ledger)), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(ledger)), prefix=".ledger.")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    os.replace(tmp, ledger)
+
+
+def has_new_activity(path, sid, state, min_new_prompts):
+    """Decide whether a session needs (re)distilling, based on size/mtime."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False, None
+    prev = state.get(sid) or {}
+    if st.st_size <= prev.get("last_size", -1) and st.st_mtime <= prev.get("last_mtime", -1):
+        return False, st
+    return True, st
+
+
+def process_one(sid, path, cfg, state, dry_run, force=False):
+    """Distill one session and append its entry. Returns status string."""
+    if session_is_excluded(path):
+        return "excluded"
+    fresh, st = has_new_activity(path, sid, state, cfg["MIN_NEW_PROMPTS"])
+    if st is None:
+        return "unchanged"
+    if not fresh and not force:
+        return "unchanged"
+    info = parse_session(path)
+    prev = state.get(sid) or {}
+    new_prompts = len(info["prompts"]) - prev.get("prompt_count", 0)
+    if len(info["prompts"]) == 0:
+        return "no-prompts"
+    if not force and new_prompts < cfg["MIN_NEW_PROMPTS"]:
+        return "below-min-prompts"
+    if dry_run:
+        print(
+            "WOULD DISTILL %s | %s | %s | %d prompt(s), %d new"
+            % (sid[:8], entry_date(info), info["title"][:60], len(info["prompts"]), new_prompts)
+        )
+        return "dry-run"
+    entry, err = distill_session(info, cfg)
+    if err:
+        log("skip %s: %s" % (sid, err))
+        return "failed"
+    append_entry(cfg, entry)
+    state[sid] = {
+        "last_size": st.st_size,
+        "last_mtime": st.st_mtime,
+        "entries": prev.get("entries", 0) + 1,
+        "prompt_count": len(info["prompts"]),
+    }
+    save_state(state)
+    log("distilled %s -> %s" % (sid, cfg["LEDGER_FILE"]))
+    return "distilled"
+
+
+# --- modes ---------------------------------------------------------------
+
+def mode_sweep(cfg, dry_run):
+    state = load_state()
+    counts = {}
+    for sid, path in find_sessions(cfg):
+        status = process_one(sid, path, cfg, state, dry_run)
+        counts[status] = counts.get(status, 0) + 1
+    summary = ", ".join("%s=%d" % kv for kv in sorted(counts.items())) or "no sessions found"
+    print("sweep: %s" % summary)
+    if not dry_run:
+        log("sweep done: %s" % summary)
+
+
+def mode_seed(cfg, days, dry_run):
+    state = load_state()
+    cutoff = datetime.datetime.now().timestamp() - days * 86400
+    candidates = []
+    for sid, path in find_sessions(cfg):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if st.st_mtime >= cutoff:
+            candidates.append((st.st_mtime, sid, path))
+    candidates.sort()  # oldest first so newest entries land on top
+    counts = {}
+    for _, sid, path in candidates:
+        status = process_one(sid, path, cfg, state, dry_run, force=True)
+        counts[status] = counts.get(status, 0) + 1
+    summary = ", ".join("%s=%d" % kv for kv in sorted(counts.items())) or "no sessions in window"
+    print("seed (last %d days): %s" % (days, summary))
+    if not dry_run:
+        log("seed done: %s" % summary)
+
+
+def mode_session(cfg, arg, dry_run):
+    path = resolve_session_arg(cfg, arg)
+    sid = os.path.splitext(os.path.basename(path))[0]
+    state = load_state()
+    status = process_one(sid, path, cfg, state, dry_run)
+    print("session %s: %s" % (sid[:8], status))
+    if status == "failed":
+        sys.exit(1)
+
+
+def mode_dream(cfg, dry_run):
+    ledger = cfg["LEDGER_FILE"]
+    if not os.path.isfile(ledger):
+        print("dream: no ledger file at %s, nothing to do" % ledger)
+        return
+    with open(ledger, encoding="utf-8") as fh:
+        content = fh.read()
+    if not content.strip():
+        print("dream: ledger is empty, nothing to do")
+        return
+    prompt = DREAM_INSTRUCTIONS.format(header=LEDGER_HEADER, ledger=content)
+    if dry_run:
+        entries = content.count("\n## ") + (1 if content.startswith("## ") else 0)
+        print("dream dry-run: would consolidate %d entries in %s via %s" % (entries, ledger, cfg["MODEL"]))
+        return
+    out, err = run_claude(prompt, cfg)
+    if err:
+        log("dream failed: %s" % err)
+        die("dream failed: %s" % err)
+    out = strip_code_fence(out)
+    if not out.startswith(LEDGER_HEADER) or "## " not in out:
+        log("dream produced malformed output, ledger left untouched")
+        die("dream output malformed, ledger left untouched")
+    if "--resume" in content and "--resume" not in out:
+        log("dream output lost all Resume lines, ledger left untouched")
+        die("dream output lost Resume lines, ledger left untouched")
+    shutil.copy2(ledger, ledger + ".bak")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(ledger)), prefix=".ledger.")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(out.rstrip() + "\n")
+    os.replace(tmp, ledger)
+    log("dream rewrote %s (backup at %s.bak)" % (ledger, ledger))
+    print("dream: ledger consolidated, backup at %s.bak" % ledger)
+    print("review the '## Promote to memory' section at the top of the ledger")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Claude Code session ledger")
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--sweep", action="store_true")
+    group.add_argument("--session", metavar="TRANSCRIPT_OR_ID")
+    group.add_argument("--seed", action="store_true")
+    group.add_argument("--dream", action="store_true")
+    ap.add_argument("--days", type=int, default=14, help="window for --seed (default 14)")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    cfg = load_config()
+
+    if args.dry_run:
+        locked = True  # no writes happen, no lock needed
+    else:
+        locked = acquire_lock()
+    if not locked:
+        # another instance (hook vs cron) is running; exit quietly
+        sys.exit(0)
+    try:
+        if args.sweep:
+            mode_sweep(cfg, args.dry_run)
+        elif args.session:
+            mode_session(cfg, args.session, args.dry_run)
+        elif args.seed:
+            mode_seed(cfg, args.days, args.dry_run)
+        elif args.dream:
+            mode_dream(cfg, args.dry_run)
+    finally:
+        if not args.dry_run:
+            release_lock()
+
+
+if __name__ == "__main__":
+    main()
