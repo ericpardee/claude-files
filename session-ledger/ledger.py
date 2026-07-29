@@ -8,9 +8,11 @@ Modes:
   --dream                 weekly consolidation pass over the ledger file
   --dry-run               with any mode: print what would happen, write nothing
 
-Config comes from ~/.claude/session-ledger.env (KEY=VALUE). Process
-environment variables with the same names take precedence, which is handy
-for testing. Only LEDGER_FILE is required.
+Config comes from <config dir>/session-ledger.env (KEY=VALUE), where the
+config dir is CLAUDE_CONFIG_DIR when set (e.g. a secondary work install)
+and ~/.claude otherwise, so each install keeps its own env file, state,
+lock, log, and ledger. Process environment variables with the same names
+take precedence, which is handy for testing. Only LEDGER_FILE is required.
 
 stdlib only. No third-party imports.
 """
@@ -26,7 +28,9 @@ import sys
 import tempfile
 
 HOME = os.path.expanduser("~")
-CLAUDE_DIR = os.path.join(HOME, ".claude")
+CLAUDE_DIR = os.path.realpath(
+    os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude"))
+)
 ENV_FILE = os.path.join(CLAUDE_DIR, "session-ledger.env")
 STATE_FILE = os.path.join(CLAUDE_DIR, "session-ledger.state.json")
 LOCK_DIR = os.path.join(CLAUDE_DIR, "session-ledger.lock")

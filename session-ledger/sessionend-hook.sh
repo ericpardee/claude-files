@@ -4,7 +4,7 @@
 # Must never block or fail session exit: always exits 0, work runs detached.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-LOG_FILE="$HOME/.claude/session-ledger.log"
+LOG_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/session-ledger.log"
 
 TRANSCRIPT="$(python3 -c '
 import json, sys

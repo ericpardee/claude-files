@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-CLAUDE_DIR="$HOME/.claude"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 ENV_FILE="$CLAUDE_DIR/session-ledger.env"
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 
