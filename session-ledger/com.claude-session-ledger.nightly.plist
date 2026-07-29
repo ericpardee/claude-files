@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.claude-session-ledger.nightly</string>
+    <string>__LABEL__</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
@@ -20,11 +20,13 @@
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
-    <string>__HOME__/.claude/session-ledger.log</string>
+    <string>__CLAUDE_DIR__/session-ledger.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.claude/session-ledger.log</string>
+    <string>__CLAUDE_DIR__/session-ledger.log</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>CLAUDE_CONFIG_DIR</key>
+        <string>__CLAUDE_DIR__</string>
         <key>PATH</key>
         <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>

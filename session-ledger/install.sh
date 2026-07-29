@@ -46,11 +46,20 @@ fi
 
 chmod +x "$SCRIPT_DIR/ledger.py" "$SCRIPT_DIR/sessionend-hook.sh"
 
-# (b) install launchd agents from templates
-for label in com.claude-session-ledger.nightly com.claude-session-ledger.dream; do
-  src="$SCRIPT_DIR/$label.plist"
+# (b) install launchd agents from templates.
+# The default install keeps the bare label; a secondary install (running
+# with CLAUDE_CONFIG_DIR set elsewhere) gets a suffix derived from its
+# config dir so both sets of agents can coexist.
+LABEL_SUFFIX=""
+if [ "$(cd "$CLAUDE_DIR" && pwd -P)" != "$(cd "$HOME/.claude" && pwd -P)" ]; then
+  LABEL_SUFFIX=".$(basename "$(dirname "$CLAUDE_DIR")")"
+fi
+for base in com.claude-session-ledger.nightly com.claude-session-ledger.dream; do
+  label="$base$LABEL_SUFFIX"
+  src="$SCRIPT_DIR/$base.plist"
   dst="$AGENTS_DIR/$label.plist"
-  sed -e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__HOME__|$HOME|g" "$src" >"$dst"
+  sed -e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__HOME__|$HOME|g" \
+      -e "s|__CLAUDE_DIR__|$CLAUDE_DIR|g" -e "s|__LABEL__|$label|g" "$src" >"$dst"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$dst"
   echo "installed $label"
@@ -92,4 +101,4 @@ echo "     python3 $SCRIPT_DIR/ledger.py --seed --days 14"
 echo "  2. Preview first if you like:"
 echo "     python3 $SCRIPT_DIR/ledger.py --seed --days 14 --dry-run"
 echo "  3. Nightly sweep runs at 02:30, dream pass Sunday 03:30."
-echo "     Logs: $HOME/.claude/session-ledger.log"
+echo "     Logs: $CLAUDE_DIR/session-ledger.log"
