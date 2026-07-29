@@ -15,11 +15,21 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/ericpardee/Development/github.com/ericpardee/claude-files/session-ledger/sessionend-hook.sh"
+          }
+        ]
+      }
     ]
   },
   "statusLine": {
     "type": "command",
-    "command": "python3 ~/.claude/statusline.py"
+    "command": "python3 ~/Development/github.com/ericpardee/claude-files/statusline.py"
   },
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true,
