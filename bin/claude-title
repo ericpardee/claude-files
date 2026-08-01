@@ -1,0 +1,29 @@
+#!/bin/zsh
+# Copy the current Claude Code session's auto-generated title to the clipboard.
+# Run inside a session with:  ! claude-title   then rename with:  /rename <cmd-v>
+set -euo pipefail
+
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -z "$sid" ]]; then
+  echo "CLAUDE_CODE_SESSION_ID not set (run this inside a Claude Code session via '! claude-title')" >&2
+  exit 1
+fi
+
+root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+matches=("$root"/projects/*/"$sid".jsonl(N))
+if (( ${#matches} == 0 )); then
+  echo "No session file found for $sid under $root" >&2
+  exit 1
+fi
+jsonl="${matches[1]}"
+
+title=$(rg '"type":"ai-title"' "$jsonl" | tail -1 | jq -r '.aiTitle // empty')
+if [[ -z "$title" ]]; then
+  echo "No generated title found yet for this session" >&2
+  exit 1
+fi
+
+title="${title// /-}"
+
+printf '%s' "$title" | pbcopy
+echo "Copied to clipboard: $title"
