@@ -561,6 +561,9 @@ def mode_sweep(cfg, dry_run):
     print("sweep: %s" % summary)
     if not dry_run:
         log("sweep done: %s" % summary)
+        if counts.get("failed") and not counts.get("distilled"):
+            # every distill attempt failed: exit non-zero so launchd records it
+            die("sweep: all %d distill attempt(s) failed, see %s" % (counts["failed"], LOG_FILE))
 
 
 def mode_seed(cfg, days, dry_run):

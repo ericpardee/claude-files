@@ -30,6 +30,28 @@ The installer:
 3. Merges a SessionEnd hook into `~/.claude/settings.json` (skipped if
    already present).
 
+## Secondary installs
+
+Run `install.sh` with `CLAUDE_CONFIG_DIR` exported to a second config dir
+(for example a work sandbox) and it installs a separate pair of agents whose
+labels carry a suffix taken from that dir's parent, with their own env file,
+state, log and lock under that dir. Those plists pin `CLAUDE_CONFIG_DIR` so
+the agents run against the right install.
+
+The default install deliberately leaves `CLAUDE_CONFIG_DIR` out of its
+plists. Claude Code keys its Keychain credential on whether the variable is
+present, so exporting it, even as `~/.claude`, makes `claude -p` under
+launchd report "Not logged in" and every distill fails.
+
+Point `LEDGER_FILE` at a folder a background process can write. On macOS,
+launchd agents cannot read or write iCloud Drive paths under
+`~/Library/Mobile Documents` (TCC blocks them), so a vault that lives there
+should be reached through a synced copy elsewhere (Dropbox, Syncthing).
+
+A sweep in which every distill attempt fails exits non-zero, so
+`launchctl print gui/$(id -u)/com.claude-session-ledger.nightly` shows a
+non-zero last exit code the next morning.
+
 ## Config reference
 
 `~/.claude/session-ledger.env`, `KEY=VALUE` lines. Process environment

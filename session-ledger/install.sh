@@ -54,12 +54,21 @@ LABEL_SUFFIX=""
 if [ "$(cd "$CLAUDE_DIR" && pwd -P)" != "$(cd "$HOME/.claude" && pwd -P)" ]; then
   LABEL_SUFFIX=".$(basename "$(dirname "$CLAUDE_DIR")")"
 fi
+# Only a secondary install pins CLAUDE_CONFIG_DIR in the plist. The default
+# install must leave it unset: Claude Code keys its Keychain credential on
+# whether the variable is present, so exporting it (even as ~/.claude) makes
+# `claude -p` under launchd report "Not logged in" and every distill fails.
 for base in com.claude-session-ledger.nightly com.claude-session-ledger.dream; do
   label="$base$LABEL_SUFFIX"
   src="$SCRIPT_DIR/$base.plist"
   dst="$AGENTS_DIR/$label.plist"
-  sed -e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__HOME__|$HOME|g" \
-      -e "s|__CLAUDE_DIR__|$CLAUDE_DIR|g" -e "s|__LABEL__|$label|g" "$src" >"$dst"
+  SED_ARGS=(-e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__HOME__|$HOME|g"
+            -e "s|__CLAUDE_DIR__|$CLAUDE_DIR|g" -e "s|__LABEL__|$label|g")
+  if [ -z "$LABEL_SUFFIX" ]; then
+    # drop the <key>CLAUDE_CONFIG_DIR</key> line and the <string> after it
+    SED_ARGS+=(-e '/<key>CLAUDE_CONFIG_DIR<\/key>/{N;d;}')
+  fi
+  sed "${SED_ARGS[@]}" "$src" >"$dst"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$dst"
   echo "installed $label"
