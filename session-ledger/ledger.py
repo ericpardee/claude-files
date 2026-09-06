@@ -39,6 +39,11 @@ RUNS_DIR = os.path.join(CLAUDE_DIR, "session-ledger-runs")
 
 LEDGER_HEADER = "# Claude Code session ledger"
 LOCK_STALE_SECONDS = 2 * 60 * 60
+# One distill call sends a capped excerpt and returns three lines; the dream
+# call sends the whole ledger and rewrites it, which takes well over five
+# minutes once the file holds a few dozen entries.
+DISTILL_TIMEOUT_SECONDS = 300
+DREAM_TIMEOUT_SECONDS = 1800
 
 DEFAULTS = {
     "MODEL": "claude-haiku-4-5-20251001",
@@ -394,7 +399,7 @@ def entry_date(info):
     return datetime.date.today().isoformat()
 
 
-def run_claude(prompt, cfg):
+def run_claude(prompt, cfg, timeout=DISTILL_TIMEOUT_SECONDS):
     os.makedirs(RUNS_DIR, exist_ok=True)
     try:
         proc = subprocess.run(
@@ -403,12 +408,12 @@ def run_claude(prompt, cfg):
             capture_output=True,
             text=True,
             cwd=RUNS_DIR,
-            timeout=300,
+            timeout=timeout,
         )
     except FileNotFoundError:
         return None, "claude CLI not found on PATH"
     except subprocess.TimeoutExpired:
-        return None, "claude -p timed out"
+        return None, "claude -p timed out after %ds" % timeout
     if proc.returncode != 0:
         return None, "claude exited %d: %s" % (proc.returncode, proc.stderr.strip()[:200])
     out = proc.stdout.strip()
@@ -613,7 +618,7 @@ def mode_dream(cfg, dry_run):
         entries = content.count("\n## ") + (1 if content.startswith("## ") else 0)
         print("dream dry-run: would consolidate %d entries in %s via %s" % (entries, ledger, cfg["MODEL"]))
         return
-    out, err = run_claude(prompt, cfg)
+    out, err = run_claude(prompt, cfg, timeout=DREAM_TIMEOUT_SECONDS)
     if err:
         log("dream failed: %s" % err)
         die("dream failed: %s" % err)

@@ -99,6 +99,10 @@ Haiku by default. Roughly one short call per active session per day (the
 excerpt is capped at 10k characters), plus one larger call per week for the
 dream pass. A day with five active sessions costs a few cents.
 
+Distill calls get five minutes each. The dream call rewrites the whole file
+and is allowed thirty minutes; a ledger of around 80 entries needs more than
+five, so expect the Sunday run to take a while.
+
 ## Uninstall
 
 ```bash
