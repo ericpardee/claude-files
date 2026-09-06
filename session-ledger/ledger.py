@@ -51,6 +51,10 @@ DEFAULTS = {
     "PROJECTS_DIR": os.path.join(CLAUDE_DIR, "projects"),
     "MIN_NEW_PROMPTS": "1",
     "MAX_EXCERPT_CHARS": "10000",
+    # Optional shell command run after a sweep that distilled at least one
+    # session, and after a successful dream (for example a script that commits
+    # and pushes the ledger). Runs via the shell, 300s timeout, exit logged.
+    "POST_SWEEP_CMD": "",
 }
 
 NOISE_PREFIXES = (
@@ -131,7 +135,8 @@ def load_config():
                 val = val.strip().strip('"').strip("'")
                 if key:
                     cfg[key] = val
-    for key in ("LEDGER_FILE", "MODEL", "PROJECTS_DIR", "MIN_NEW_PROMPTS", "MAX_EXCERPT_CHARS"):
+    for key in ("LEDGER_FILE", "MODEL", "PROJECTS_DIR", "MIN_NEW_PROMPTS", "MAX_EXCERPT_CHARS",
+                "POST_SWEEP_CMD"):
         if os.environ.get(key):
             cfg[key] = os.environ[key]
     if not cfg.get("LEDGER_FILE"):
@@ -555,6 +560,30 @@ def process_one(sid, path, cfg, state, dry_run, force=False):
     return "distilled"
 
 
+POST_SWEEP_TIMEOUT_SECONDS = 300
+
+
+def run_post_sweep(cfg, what):
+    """Run POST_SWEEP_CMD, if configured, after the ledger changed. Never raises."""
+    cmd = (cfg.get("POST_SWEEP_CMD") or "").strip()
+    if not cmd:
+        return
+    try:
+        proc = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True,
+            timeout=POST_SWEEP_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        log("post-sweep command timed out after %ds (%s)" % (POST_SWEEP_TIMEOUT_SECONDS, what))
+        return
+    except OSError as exc:
+        log("post-sweep command could not run (%s): %s" % (what, exc))
+        return
+    tail = (proc.stdout + proc.stderr).strip().splitlines()
+    log("post-sweep command exit %d after %s%s"
+        % (proc.returncode, what, (": " + tail[-1][:200]) if tail else ""))
+
+
 # --- modes ---------------------------------------------------------------
 
 def mode_sweep(cfg, dry_run):
@@ -567,6 +596,8 @@ def mode_sweep(cfg, dry_run):
     print("sweep: %s" % summary)
     if not dry_run:
         log("sweep done: %s" % summary)
+        if counts.get("distilled"):
+            run_post_sweep(cfg, "sweep")
         if counts.get("failed") and not counts.get("distilled"):
             # every distill attempt failed: exit non-zero so launchd records it
             die("sweep: all %d distill attempt(s) failed, see %s" % (counts["failed"], LOG_FILE))
