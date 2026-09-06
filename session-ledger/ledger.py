@@ -38,6 +38,7 @@ LOG_FILE = os.path.join(CLAUDE_DIR, "session-ledger.log")
 RUNS_DIR = os.path.join(CLAUDE_DIR, "session-ledger-runs")
 
 LEDGER_HEADER = "# Claude Code session ledger"
+RESUME_ID_RE = re.compile(r"--resume ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 LOCK_STALE_SECONDS = 2 * 60 * 60
 # One distill call sends a capped excerpt and returns three lines; the dream
 # call sends the whole ledger and rewrites it, which takes well over five
@@ -629,6 +630,11 @@ def mode_dream(cfg, dry_run):
     if "--resume" in content and "--resume" not in out:
         log("dream output lost all Resume lines, ledger left untouched")
         die("dream output lost Resume lines, ledger left untouched")
+    lost = set(RESUME_ID_RE.findall(content)) - set(RESUME_ID_RE.findall(out))
+    if lost:
+        short = ", ".join(sorted(i[:8] for i in lost))
+        log("dream output lost %d Resume id(s) (%s), ledger left untouched" % (len(lost), short))
+        die("dream output lost %d Resume id(s): %s; ledger left untouched" % (len(lost), short))
     shutil.copy2(ledger, ledger + ".bak")
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(ledger)), prefix=".ledger.")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
