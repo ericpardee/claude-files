@@ -43,10 +43,12 @@ plists. Claude Code keys its Keychain credential on whether the variable is
 present, so exporting it, even as `~/.claude`, makes `claude -p` under
 launchd report "Not logged in" and every distill fails.
 
-Point `LEDGER_FILE` at a folder a background process can write. On macOS,
-launchd agents cannot read or write iCloud Drive paths under
-`~/Library/Mobile Documents` (TCC blocks them), so a vault that lives there
-should be reached through a synced copy elsewhere (Dropbox, Syncthing).
+`LEDGER_FILE` may live inside an iCloud-synced Obsidian vault
+(`~/Library/Mobile Documents/...`). macOS TCC attributes a launchd agent's
+file access to the agent's program and refuses iCloud Drive paths to a
+`python3` program with `Operation not permitted`, so the plists start
+`ledger.py` through `/bin/bash -c 'exec /usr/bin/python3 ...'`, which is
+allowed. Keep that wrapper if you edit the templates.
 
 A sweep in which every distill attempt fails exits non-zero, so
 `launchctl print gui/$(id -u)/com.claude-session-ledger.nightly` shows a
