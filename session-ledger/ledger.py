@@ -672,6 +672,7 @@ def mode_dream(cfg, dry_run):
         fh.write(out.rstrip() + "\n")
     os.replace(tmp, ledger)
     log("dream rewrote %s (backup at %s.bak)" % (ledger, ledger))
+    run_post_sweep(cfg, "dream")
     print("dream: ledger consolidated, backup at %s.bak" % ledger)
     print("review the '## Promote to memory' section at the top of the ledger")
 

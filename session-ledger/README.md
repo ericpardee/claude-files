@@ -66,6 +66,7 @@ variables with the same names override the file.
 | `PROJECTS_DIR` | `~/.claude/projects` | Claude Code transcript location |
 | `MIN_NEW_PROMPTS` | `1` | New user prompts needed before redistilling |
 | `MAX_EXCERPT_CHARS` | `10000` | Cap on excerpt sent to the model |
+| `POST_SWEEP_CMD` | unset | Shell command run after a sweep that distilled at least one session, and after a successful dream (for example a script that commits and pushes the ledger). 300s timeout, exit code logged |
 
 Other files:
 
