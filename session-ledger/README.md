@@ -1,6 +1,6 @@
 # session-ledger
 
-Automatic catalog of every Claude Code session. Each session gets a short
+Automatic catalog of every Claude Code and Codex CLI session. Each session gets a short
 distilled entry (outcome, artifacts, open threads, resume command) appended
 to a single markdown ledger file, newest first. A nightly sweep catches
 sessions the SessionEnd hook missed, and a weekly "dream" pass consolidates
@@ -54,6 +54,26 @@ A sweep in which every distill attempt fails exits non-zero, so
 `launchctl print gui/$(id -u)/com.claude-session-ledger.nightly` shows a
 non-zero last exit code the next morning.
 
+## Codex CLI
+
+Codex sessions are part of the same ledger. The sweep reads Codex rollouts
+(`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex` by default)
+next to Claude transcripts; entries for them end in `codex resume <id>`.
+Only interactive sessions count: `codex exec` runs and spawned subagent
+threads are skipped, and Codex's injected context blocks are not prompts.
+
+The installer appends a `SessionEnd` command hook to `config.toml` (set
+`CODEX_HOME` first for a secondary install). Codex passes the same stdin
+JSON as Claude Code (`session_id`, `cwd`, `transcript_path`), so the one
+hook script serves both. SessionEnd hooks are capped at three seconds; the
+hook only spawns the distill and returns.
+
+Distillation can run on either CLI. `DISTILL_TOOL=codex` uses
+`codex exec --ephemeral -s read-only` with `CODEX_MODEL` (empty means the
+model configured in Codex) at `CODEX_REASONING_EFFORT` (default `low`).
+Ephemeral matters: a non-ephemeral run would leave a rollout that the next
+sweep would treat as a session.
+
 ## Config reference
 
 `~/.claude/session-ledger.env`, `KEY=VALUE` lines. Process environment
@@ -66,6 +86,11 @@ variables with the same names override the file.
 | `PROJECTS_DIR` | `~/.claude/projects` | Claude Code transcript location |
 | `MIN_NEW_PROMPTS` | `1` | New user prompts needed before redistilling |
 | `MAX_EXCERPT_CHARS` | `10000` | Cap on excerpt sent to the model |
+| `CODEX_SESSIONS_DIR` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | Codex rollouts to sweep; `none` disables |
+| `DISTILL_TOOL` | `claude` | `claude` (claude -p) or `codex` (codex exec) |
+| `CODEX_MODEL` | unset | Model for `codex exec` distills; unset uses Codex's configured model |
+| `CODEX_REASONING_EFFORT` | `low` | Reasoning effort for `codex exec` distills |
+| `BACKFILL_MAX_AGE_DAYS` | `30` | A never-seen session older than this is marked stale, not distilled; `--seed --days N` backfills deliberately |
 | `POST_SWEEP_CMD` | unset | Shell command run after a sweep that distilled at least one session, and after a successful dream (for example a script that commits and pushes the ledger). 300s timeout, exit code logged |
 
 Other files:

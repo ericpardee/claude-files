@@ -37,7 +37,9 @@ LOCK_DIR = os.path.join(CLAUDE_DIR, "session-ledger.lock")
 LOG_FILE = os.path.join(CLAUDE_DIR, "session-ledger.log")
 RUNS_DIR = os.path.join(CLAUDE_DIR, "session-ledger-runs")
 
-LEDGER_HEADER = "# Claude Code session ledger"
+LEDGER_HEADER = "# Coding agent session ledger"
+# Ledgers written before Codex support carry the old header; both are valid.
+LEGACY_LEDGER_HEADERS = ("# Claude Code session ledger",)
 RESUME_ID_RE = re.compile(r"--resume ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 LOCK_STALE_SECONDS = 2 * 60 * 60
 # One distill call sends a capped excerpt and returns three lines; the dream
@@ -51,6 +53,19 @@ DEFAULTS = {
     "PROJECTS_DIR": os.path.join(CLAUDE_DIR, "projects"),
     "MIN_NEW_PROMPTS": "1",
     "MAX_EXCERPT_CHARS": "10000",
+    # Codex CLI sessions (rollout-*.jsonl). Default: $CODEX_HOME/sessions when
+    # CODEX_HOME is set, else ~/.codex/sessions. Set to "none" to ignore Codex.
+    "CODEX_SESSIONS_DIR": "",
+    # Which CLI distills: "claude" (claude -p, MODEL) or "codex" (codex exec,
+    # CODEX_MODEL and CODEX_REASONING_EFFORT; empty model = Codex's default).
+    "DISTILL_TOOL": "claude",
+    "CODEX_MODEL": "",
+    "CODEX_REASONING_EFFORT": "low",
+    # A session never seen before whose last activity is older than this is
+    # recorded as stale and not distilled, so a first install (or newly
+    # enabled Codex support) does not pour months of history into the top
+    # of the ledger. --seed --days N still backfills deliberately.
+    "BACKFILL_MAX_AGE_DAYS": "30",
     # Optional shell command run after a sweep that distilled at least one
     # session, and after a successful dream (for example a script that commits
     # and pushes the ledger). Runs via the shell, 300s timeout, exit logged.
@@ -136,7 +151,8 @@ def load_config():
                 if key:
                     cfg[key] = val
     for key in ("LEDGER_FILE", "MODEL", "PROJECTS_DIR", "MIN_NEW_PROMPTS", "MAX_EXCERPT_CHARS",
-                "POST_SWEEP_CMD"):
+                "POST_SWEEP_CMD", "CODEX_SESSIONS_DIR", "DISTILL_TOOL", "CODEX_MODEL",
+                "CODEX_REASONING_EFFORT", "BACKFILL_MAX_AGE_DAYS"):
         if os.environ.get(key):
             cfg[key] = os.environ[key]
     if not cfg.get("LEDGER_FILE"):
@@ -148,6 +164,15 @@ def load_config():
     cfg["PROJECTS_DIR"] = os.path.expanduser(cfg["PROJECTS_DIR"])
     cfg["MIN_NEW_PROMPTS"] = int(cfg["MIN_NEW_PROMPTS"])
     cfg["MAX_EXCERPT_CHARS"] = int(cfg["MAX_EXCERPT_CHARS"])
+    cfg["BACKFILL_MAX_AGE_DAYS"] = int(cfg["BACKFILL_MAX_AGE_DAYS"])
+    codex_dir = (cfg.get("CODEX_SESSIONS_DIR") or "").strip()
+    if not codex_dir:
+        codex_home = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
+        codex_dir = os.path.join(codex_home, "sessions")
+    cfg["CODEX_SESSIONS_DIR"] = "" if codex_dir.lower() == "none" else os.path.expanduser(codex_dir)
+    cfg["DISTILL_TOOL"] = (cfg.get("DISTILL_TOOL") or "claude").strip().lower()
+    if cfg["DISTILL_TOOL"] not in ("claude", "codex"):
+        die("DISTILL_TOOL must be claude or codex, not %r" % cfg["DISTILL_TOOL"])
     return cfg
 
 
@@ -230,23 +255,38 @@ def encode_project_dir(path):
     return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(path))
 
 
+CODEX_ROLLOUT_RE = re.compile(r"^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
+
+
 def find_sessions(cfg):
-    """Yield (session_id, jsonl_path) for top-level session transcripts."""
+    """Yield (session_id, jsonl_path) for top-level session transcripts.
+
+    Claude Code transcripts live under PROJECTS_DIR/<project>/<id>.jsonl; Codex
+    rollouts under CODEX_SESSIONS_DIR/YYYY/MM/DD/rollout-<stamp>-<id>.jsonl.
+    Both are keyed by their session id.
+    """
     projects_dir = cfg["PROJECTS_DIR"]
     skip_project = encode_project_dir(RUNS_DIR)
-    if not os.path.isdir(projects_dir):
-        return
-    for proj in sorted(os.listdir(projects_dir)):
-        proj_path = os.path.join(projects_dir, proj)
-        if not os.path.isdir(proj_path) or proj == skip_project:
-            continue
-        for name in sorted(os.listdir(proj_path)):
-            if not name.endswith(".jsonl"):
+    if os.path.isdir(projects_dir):
+        for proj in sorted(os.listdir(projects_dir)):
+            proj_path = os.path.join(projects_dir, proj)
+            if not os.path.isdir(proj_path) or proj == skip_project:
                 continue
-            path = os.path.join(proj_path, name)
-            if "/subagents/" in path:
-                continue
-            yield name[:-6], path
+            for name in sorted(os.listdir(proj_path)):
+                if not name.endswith(".jsonl"):
+                    continue
+                path = os.path.join(proj_path, name)
+                if "/subagents/" in path:
+                    continue
+                yield name[:-6], path
+    codex_dir = cfg.get("CODEX_SESSIONS_DIR") or ""
+    if codex_dir and os.path.isdir(codex_dir):
+        for dirpath, dirnames, filenames in os.walk(codex_dir):
+            dirnames.sort()
+            for name in sorted(filenames):
+                match = CODEX_ROLLOUT_RE.match(name)
+                if match:
+                    yield match.group(1), os.path.join(dirpath, name)
 
 
 def resolve_session_arg(cfg, arg):
@@ -259,7 +299,8 @@ def resolve_session_arg(cfg, arg):
     for sid, path in find_sessions(cfg):
         if sid == arg:
             return path
-    die("no session jsonl found for id %s under %s" % (arg, cfg["PROJECTS_DIR"]))
+    die("no session jsonl found for id %s under %s or %s"
+        % (arg, cfg["PROJECTS_DIR"], cfg.get("CODEX_SESSIONS_DIR") or "(no Codex dir)"))
 
 
 def session_is_excluded(path):
@@ -298,7 +339,139 @@ def is_noise_prompt(text):
 
 
 def parse_session(path):
-    """Parse a session jsonl into the bits the distiller needs."""
+    """Parse a session jsonl into the bits the distiller needs.
+
+    Detects the format from the first record: a Codex rollout opens with a
+    ``session_meta`` record; anything else is a Claude Code transcript.
+    """
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                first = json.loads(raw)
+            except ValueError:
+                first = None
+            break
+        else:
+            first = None
+    if isinstance(first, dict) and first.get("type") == "session_meta":
+        return parse_codex_session(path)
+    return parse_claude_session(path)
+
+
+CODEX_IMAGE_TAG_RE = re.compile(r"^\s*<image\b[^>]*>\s*", re.IGNORECASE)
+# Typed prompts that carry no work: quitting the TUI, slash commands, and the
+# AGENTS.md block that older Codex versions injected as a user message.
+CODEX_NOISE_EXACT = ("exit", "quit", "q", "/exit", "/quit", "/clear", "/new", "/status")
+CODEX_NOISE_PREFIXES = ("# AGENTS.md instructions",)
+
+
+def _codex_message_text(payload):
+    parts = []
+    for block in payload.get("content") or []:
+        if isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "\n".join(parts)
+
+
+def _codex_user_prompt(text):
+    """The typed prompt from a Codex user message, or None for injected context.
+
+    Codex injects blocks such as <environment_context>, <recommended_plugins>,
+    <user_action> and <turn_aborted> as user messages; those start with a tag
+    and are not prompts. An attached image is a leading <image ...> tag in
+    front of the typed text and is stripped.
+    """
+    stripped = text.lstrip()
+    while CODEX_IMAGE_TAG_RE.match(stripped):
+        stripped = CODEX_IMAGE_TAG_RE.sub("", stripped, count=1)
+    if not stripped.strip() or stripped.startswith("<"):
+        return None
+    prompt = stripped.strip()
+    if prompt.lower() in CODEX_NOISE_EXACT or prompt.startswith(CODEX_NOISE_PREFIXES):
+        return None
+    return prompt
+
+
+def parse_codex_session(path):
+    """Parse a Codex CLI rollout into the same shape as a Claude transcript.
+
+    Scripted runs (``codex exec``) and spawned subagent threads are marked
+    ``excluded`` so only interactive sessions reach the ledger.
+    """
+    prompts = []
+    last_assistant = None
+    cwd = None
+    first_ts = None
+    last_ts = None
+    session_id = None
+    excluded = None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            ts = rec.get("timestamp")
+            if isinstance(ts, str) and ts:
+                if first_ts is None or ts < first_ts:
+                    first_ts = ts
+                if last_ts is None or ts > last_ts:
+                    last_ts = ts
+            rtype = rec.get("type")
+            payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+            if rtype == "session_meta":
+                session_id = payload.get("id") or payload.get("session_id") or session_id
+                cwd = payload.get("cwd") or cwd
+                source = payload.get("source")
+                thread_source = payload.get("thread_source")
+                if source == "exec" or payload.get("originator") == "codex_exec":
+                    excluded = "codex exec run"
+                elif isinstance(source, dict) or isinstance(thread_source, dict):
+                    excluded = "codex subagent thread"
+            elif rtype == "turn_context":
+                cwd = cwd or payload.get("cwd")
+            elif rtype == "response_item" and payload.get("type") == "message":
+                role = payload.get("role")
+                if role == "user":
+                    prompt = _codex_user_prompt(_codex_message_text(payload))
+                    if prompt and not is_noise_prompt(prompt):
+                        prompts.append(prompt)
+                elif role == "assistant":
+                    text = _codex_message_text(payload).strip()
+                    if text:
+                        last_assistant = text
+            elif rtype == "event_msg" and payload.get("type") == "task_complete":
+                message = payload.get("last_agent_message")
+                if isinstance(message, str) and message.strip():
+                    last_assistant = message.strip()
+    if not session_id:
+        match = CODEX_ROLLOUT_RE.match(os.path.basename(path))
+        session_id = match.group(1) if match else os.path.splitext(os.path.basename(path))[0]
+    title = re.sub(r"\s+", " ", prompts[0]).strip()[:60] if prompts else "untitled"
+    return {
+        "tool": "codex",
+        "session_id": session_id,
+        "path": path,
+        "prompts": prompts,
+        "last_assistant": last_assistant,
+        "title": title,
+        "cwd": cwd or os.getcwd(),
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "excluded": excluded,
+    }
+
+
+def parse_claude_session(path):
+    """Parse a Claude Code transcript into the bits the distiller needs."""
     prompts = []
     last_assistant = None
     ai_title = None
@@ -364,6 +537,7 @@ def parse_session(path):
     if not title:
         title = "untitled"
     return {
+        "tool": "claude",
         "session_id": session_id,
         "path": path,
         "prompts": prompts,
@@ -372,6 +546,7 @@ def parse_session(path):
         "cwd": cwd or os.getcwd(),
         "first_ts": first_ts,
         "last_ts": last_ts,
+        "excluded": None,
     }
 
 
@@ -406,7 +581,10 @@ def entry_date(info):
 
 
 def run_claude(prompt, cfg, timeout=DISTILL_TIMEOUT_SECONDS):
+    """Run the configured distiller on ``prompt`` (stdin). Returns (text, error)."""
     os.makedirs(RUNS_DIR, exist_ok=True)
+    if cfg.get("DISTILL_TOOL") == "codex":
+        return _run_codex(prompt, cfg, timeout)
     try:
         proc = subprocess.run(
             ["claude", "-p", "--model", cfg["MODEL"]],
@@ -421,10 +599,53 @@ def run_claude(prompt, cfg, timeout=DISTILL_TIMEOUT_SECONDS):
     except subprocess.TimeoutExpired:
         return None, "claude -p timed out after %ds" % timeout
     if proc.returncode != 0:
-        return None, "claude exited %d: %s" % (proc.returncode, proc.stderr.strip()[:200])
+        detail = (proc.stderr.strip() or proc.stdout.strip())[:200]
+        return None, "claude exited %d: %s" % (proc.returncode, detail)
     out = proc.stdout.strip()
     if not out:
         return None, "claude returned empty output"
+    return out, None
+
+
+def _run_codex(prompt, cfg, timeout):
+    """Distill with ``codex exec``.
+
+    Ephemeral so the run leaves no rollout behind (a rollout would be swept
+    as a session next time), read-only sandbox, and the answer is read from
+    the last-message file because stdout carries Codex's own progress output.
+    """
+    fd, out_path = tempfile.mkstemp(dir=RUNS_DIR, prefix=".codex-distill.", suffix=".md")
+    os.close(fd)
+    argv = [
+        "codex", "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
+        "-c", 'model_reasoning_effort="%s"' % (cfg.get("CODEX_REASONING_EFFORT") or "low"),
+        "-o", out_path,
+    ]
+    if cfg.get("CODEX_MODEL"):
+        argv += ["-m", cfg["CODEX_MODEL"]]
+    try:
+        proc = subprocess.run(
+            argv, input=prompt, capture_output=True, text=True, cwd=RUNS_DIR, timeout=timeout,
+        )
+    except FileNotFoundError:
+        return None, "codex CLI not found on PATH"
+    except subprocess.TimeoutExpired:
+        return None, "codex exec timed out after %ds" % timeout
+    finally:
+        try:
+            with open(out_path, encoding="utf-8") as fh:
+                out = fh.read().strip()
+        except OSError:
+            out = ""
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        detail = (proc.stderr.strip() or proc.stdout.strip())[-200:]
+        return None, "codex exited %d: %s" % (proc.returncode, detail)
+    if not out:
+        return None, "codex returned empty output"
     return out, None
 
 
@@ -481,9 +702,15 @@ def distill_session(info, cfg):
         "- Outcome: %s" % fields["Outcome"],
         "- Artifacts: %s" % (fields.get("Artifacts") or "none"),
         "- Open threads: %s" % (fields.get("Open threads") or "none"),
-        "- Resume: `claude --resume %s` (in %s)" % (sid, info["cwd"]),
+        "- Resume: `%s` (in %s)" % (resume_command(info), info["cwd"]),
     ])
     return entry, None
+
+
+def resume_command(info):
+    if info.get("tool") == "codex":
+        return "codex resume %s" % info["session_id"]
+    return "claude --resume %s" % info["session_id"]
 
 
 def append_entry(cfg, entry):
@@ -522,6 +749,19 @@ def has_new_activity(path, sid, state, min_new_prompts):
     return True, st
 
 
+def session_is_stale(info, cfg):
+    """True when a never-seen session's last activity is past the backfill window."""
+    max_age = cfg.get("BACKFILL_MAX_AGE_DAYS") or 0
+    ts = info.get("last_ts") or info.get("first_ts")
+    if max_age <= 0 or not ts:
+        return False
+    try:
+        last = datetime.date.fromisoformat(ts[:10])
+    except ValueError:
+        return False
+    return (datetime.date.today() - last).days > max_age
+
+
 def process_one(sid, path, cfg, state, dry_run, force=False):
     """Distill one session and append its entry. Returns status string."""
     if session_is_excluded(path):
@@ -533,6 +773,18 @@ def process_one(sid, path, cfg, state, dry_run, force=False):
         return "unchanged"
     info = parse_session(path)
     prev = state.get(sid) or {}
+    if info.get("excluded"):
+        if not dry_run:
+            state[sid] = {"last_size": st.st_size, "last_mtime": st.st_mtime,
+                          "excluded": info["excluded"], "prompt_count": 0}
+            save_state(state)
+        return "excluded"
+    if not prev and not force and session_is_stale(info, cfg):
+        if not dry_run:
+            state[sid] = {"last_size": st.st_size, "last_mtime": st.st_mtime,
+                          "stale": True, "prompt_count": len(info["prompts"])}
+            save_state(state)
+        return "stale"
     new_prompts = len(info["prompts"]) - prev.get("prompt_count", 0)
     if len(info["prompts"]) == 0:
         return "no-prompts"
@@ -540,8 +792,9 @@ def process_one(sid, path, cfg, state, dry_run, force=False):
         return "below-min-prompts"
     if dry_run:
         print(
-            "WOULD DISTILL %s | %s | %s | %d prompt(s), %d new"
-            % (sid[:8], entry_date(info), info["title"][:60], len(info["prompts"]), new_prompts)
+            "WOULD DISTILL %s %s | %s | %s | %d prompt(s), %d new"
+            % (info.get("tool", "claude"), sid[:8], entry_date(info), info["title"][:60],
+               len(info["prompts"]), new_prompts)
         )
         return "dry-run"
     entry, err = distill_session(info, cfg)
@@ -655,7 +908,7 @@ def mode_dream(cfg, dry_run):
         log("dream failed: %s" % err)
         die("dream failed: %s" % err)
     out = strip_code_fence(out)
-    if not out.startswith(LEDGER_HEADER) or "## " not in out:
+    if not out.startswith((LEDGER_HEADER,) + LEGACY_LEDGER_HEADERS) or "## " not in out:
         log("dream produced malformed output, ledger left untouched")
         die("dream output malformed, ledger left untouched")
     if "--resume" in content and "--resume" not in out:

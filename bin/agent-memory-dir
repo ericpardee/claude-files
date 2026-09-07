@@ -1,0 +1,13 @@
+#!/bin/bash
+# Print the shared agent memory directory for the current project.
+#
+# Claude Code keeps one memory directory per project under its config home,
+# keyed by the project path with every non-alphanumeric character replaced
+# by "-". Codex (and anything else) reads and writes the same directory by
+# computing the same key, so both tools share one memory. The project is the
+# git root when inside a repository, else the current directory.
+set -euo pipefail
+home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+key="$(printf '%s' "$root" | sed -E 's/[^A-Za-z0-9]/-/g')"
+printf '%s/projects/%s/memory\n' "$home" "$key"

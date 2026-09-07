@@ -38,6 +38,19 @@ LEDGER_FILE=$LEDGER_FILE
 
 # Cap on the excerpt sent to the model per session.
 #MAX_EXCERPT_CHARS=10000
+
+# Codex CLI sessions are swept too. Default: \$CODEX_HOME/sessions when
+# CODEX_HOME is set, else ~/.codex/sessions. "none" ignores Codex.
+#CODEX_SESSIONS_DIR=$HOME/.codex/sessions
+
+# Which CLI distills: claude (claude -p with MODEL) or codex (codex exec with
+# CODEX_MODEL, empty = Codex's configured default, and CODEX_REASONING_EFFORT).
+#DISTILL_TOOL=claude
+#CODEX_MODEL=
+#CODEX_REASONING_EFFORT=low
+
+# Shell command run after a sweep that distilled something and after a dream.
+#POST_SWEEP_CMD=
 EOF
   echo "wrote $ENV_FILE"
 else
@@ -100,6 +113,33 @@ else:
     os.replace(tmp, settings_path)
     print("added SessionEnd hook to settings.json")
 PYEOF
+
+# (c2) Codex CLI: a SessionEnd command hook in config.toml. Codex passes the
+# same stdin JSON (session_id, cwd, transcript_path) as Claude Code, so the
+# one hook script serves both. SessionEnd hooks are capped at three seconds,
+# which the detached hook script fits with room to spare.
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+CODEX_CONFIG="$CODEX_DIR/config.toml"
+if [ -f "$CODEX_CONFIG" ]; then
+  if grep -q "session-ledger" "$CODEX_CONFIG"; then
+    echo "Codex SessionEnd hook already present in $CODEX_CONFIG"
+  else
+    cat >>"$CODEX_CONFIG" <<TOMLEOF
+
+# session-ledger: distill each session into the ledger when it ends.
+[[hooks.SessionEnd]]
+matcher = "other"
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "bash $SCRIPT_DIR/sessionend-hook.sh"
+timeout = 3
+TOMLEOF
+    echo "added Codex SessionEnd hook to $CODEX_CONFIG"
+  fi
+else
+  echo "no Codex config at $CODEX_CONFIG; Codex sessions are still swept nightly if the sessions dir exists"
+fi
 
 # (d) next steps
 echo
