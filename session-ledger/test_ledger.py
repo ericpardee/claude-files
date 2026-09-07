@@ -140,7 +140,8 @@ def test_codex_distill_uses_an_ephemeral_read_only_exec(monkeypatch, tmp_path):
 
 
 def test_codex_noise_prompts_are_not_prompts():
-    for noise in ("exit", "/exit", "Q", "# AGENTS.md instructions for /Users/x\n<INSTRUCTIONS>"):
+    for noise in ("exit", "/exit", "Q", "# AGENTS.md instructions for /Users/x\n<INSTRUCTIONS>",
+                  "# Files mentioned by the user:\n## codex-clipboard-1.png"):
         assert ledger._codex_user_prompt(noise) is None
     assert ledger._codex_user_prompt("exit the loop early when the queue is empty") == (
         "exit the loop early when the queue is empty")

@@ -365,7 +365,7 @@ CODEX_IMAGE_TAG_RE = re.compile(r"^\s*<image\b[^>]*>\s*", re.IGNORECASE)
 # Typed prompts that carry no work: quitting the TUI, slash commands, and the
 # AGENTS.md block that older Codex versions injected as a user message.
 CODEX_NOISE_EXACT = ("exit", "quit", "q", "/exit", "/quit", "/clear", "/new", "/status")
-CODEX_NOISE_PREFIXES = ("# AGENTS.md instructions",)
+CODEX_NOISE_PREFIXES = ("# AGENTS.md instructions", "# Files mentioned by the user")
 
 
 def _codex_message_text(payload):
