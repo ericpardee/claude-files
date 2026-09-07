@@ -880,7 +880,9 @@ def mode_seed(cfg, days, dry_run):
 
 def mode_session(cfg, arg, dry_run):
     path = resolve_session_arg(cfg, arg)
-    sid = os.path.splitext(os.path.basename(path))[0]
+    name = os.path.basename(path)
+    match = CODEX_ROLLOUT_RE.match(name)
+    sid = match.group(1) if match else os.path.splitext(name)[0]
     state = load_state()
     status = process_one(sid, path, cfg, state, dry_run)
     print("session %s: %s" % (sid[:8], status))

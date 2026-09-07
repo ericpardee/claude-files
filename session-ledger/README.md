@@ -66,7 +66,10 @@ The installer appends a `SessionEnd` command hook to `config.toml` (set
 `CODEX_HOME` first for a secondary install). Codex passes the same stdin
 JSON as Claude Code (`session_id`, `cwd`, `transcript_path`), so the one
 hook script serves both. SessionEnd hooks are capped at three seconds; the
-hook only spawns the distill and returns.
+hook only spawns the distill and returns. Codex runs a user-defined hook
+only once its hash is recorded as trusted in `hooks.state`; the installer
+asks `codex app-server` for the hook's key and hash and records them, and
+rerunning `install.sh` re-trusts a hook whose command line changed.
 
 Distillation can run on either CLI. `DISTILL_TOOL=codex` uses
 `codex exec --ephemeral -s read-only` with `CODEX_MODEL` (empty means the

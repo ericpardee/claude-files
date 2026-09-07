@@ -137,6 +137,66 @@ timeout = 3
 TOMLEOF
     echo "added Codex SessionEnd hook to $CODEX_CONFIG"
   fi
+  # Codex runs a user-defined hook only once its current hash is recorded as
+  # trusted in hooks.state. Ask the app-server for the hook's key and hash and
+  # record them; a hook whose command line later changes shows as "modified"
+  # and needs this again (rerunning install.sh does it).
+  if command -v codex >/dev/null 2>&1; then
+    CODEX_HOME="$CODEX_DIR" python3 - "$CODEX_CONFIG" "$HOME" <<'PYEOF'
+import json, os, re, subprocess, sys
+config, cwd = sys.argv[1], sys.argv[2]
+try:
+    p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True)
+except OSError as exc:
+    sys.exit("could not start codex app-server to trust the hook: %s" % exc)
+def send(o):
+    p.stdin.write(json.dumps(o) + "\n"); p.stdin.flush()
+def wait(id_):
+    for _ in range(80):
+        line = p.stdout.readline()
+        if not line:
+            return None
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        if m.get("id") == id_:
+            return m
+try:
+    send({"jsonrpc": "2.0", "method": "initialize", "id": 1,
+          "params": {"clientInfo": {"name": "session-ledger", "title": "session-ledger", "version": "1.0"}}})
+    wait(1)
+    send({"jsonrpc": "2.0", "method": "initialized"})
+    send({"jsonrpc": "2.0", "method": "hooks/list", "id": 2, "params": {"cwds": [cwd]}})
+    resp = wait(2)
+finally:
+    try:
+        p.stdin.close()
+    except OSError:
+        pass
+    p.terminate()
+hooks = [h for d in (resp or {}).get("result", {}).get("data", []) for h in d.get("hooks", [])
+         if "session-ledger" in (h.get("command") or "") and h.get("sourcePath") == config]
+if not hooks:
+    sys.exit("codex app-server did not list the session-ledger hook; trust it from the Codex UI")
+h = hooks[0]
+if h.get("trustStatus") == "trusted":
+    print("Codex hook already trusted")
+    sys.exit(0)
+text = open(config, encoding="utf-8").read()
+block = '[hooks.state."%s"]\nenabled = true\ntrusted_hash = "%s"\n' % (h["key"], h["currentHash"])
+pattern = r'\[hooks\.state\."%s"\]\n(?:[^\[\n][^\n]*\n)*' % re.escape(h["key"])
+if re.search(pattern, text):
+    text = re.sub(pattern, block, text)
+else:
+    text = text.rstrip("\n") + "\n\n" + block
+open(config, "w", encoding="utf-8").write(text)
+print("trusted Codex hook %s (was %s)" % (h["key"], h.get("trustStatus")))
+PYEOF
+  else
+    echo "codex not on PATH; trust the hook from the Codex UI or rerun install.sh with codex installed"
+  fi
 else
   echo "no Codex config at $CODEX_CONFIG; Codex sessions are still swept nightly if the sessions dir exists"
 fi
